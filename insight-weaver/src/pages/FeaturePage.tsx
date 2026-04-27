@@ -6,6 +6,7 @@ import { useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
 import { useNavigate } from "react-router-dom";
 import { PageFooter } from "@/components/PageFooter";
+import { calculateMutualInfo } from "@/lib/metrics";
 
 export default function FeaturePage() {
   const { dataset } = useData();
@@ -16,21 +17,32 @@ export default function FeaturePage() {
 
   const featureImportance = useMemo(() => {
     if (!dataset) return [];
-    return dataset.columnStats
-      .filter(c => c.type === "numeric")
-      .map((c, i) => {
-        const baseImportance = Math.random() * 0.5 + (c.std ? Math.min(c.std / (c.max! - c.min! + 1), 1) * 0.5 : 0.2);
-        const pseudoCorr = baseImportance * 1.5; 
-        const filtered = pseudoCorr > corrThreshold;
+    
+    // Find a likely target column (default to 'hired' or the last column)
+    const target = dataset.headers.includes("hired") ? "hired" : dataset.headers[dataset.headers.length - 1];
+    
+    const results = dataset.columnStats
+      .filter(c => c.name !== target)
+      .map((c) => {
+        const miValue = calculateMutualInfo(dataset.data, c.name, target);
+        const filtered = miValue > (1 - corrThreshold) * 0.2; // Dummy threshold logic for visualization
         return {
           name: c.name.slice(0, 14),
-          importance: filtered ? 0 : baseImportance,
-          original: baseImportance,
+          importance: filtered ? 0 : miValue,
+          original: miValue,
           filtered,
         };
       })
       .sort((a, b) => b.original - a.original)
-      .slice(0, 12);
+      .slice(0, 15);
+
+    // Normalize results to [0, 1] for better visual scaling
+    const maxVal = Math.max(...results.map(r => r.original)) || 1;
+    return results.map(r => ({
+      ...r,
+      importance: r.importance / maxVal,
+      original: r.original / maxVal
+    }));
   }, [dataset, corrThreshold]);
 
   if (!dataset) {

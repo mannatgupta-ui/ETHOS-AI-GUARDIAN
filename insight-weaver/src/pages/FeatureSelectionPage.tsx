@@ -6,6 +6,7 @@ import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageFooter } from "@/components/PageFooter";
 import { Shield, ShieldPlus, ShieldCheck, X } from "lucide-react";
+import { calculateMutualInfo } from "@/lib/metrics";
 
 export default function FeatureSelectionPage() {
   const { dataset, setDataset, safeList, toggleSafeColumn, selectionStep: step, setSelectionStep: setStep } = useData();
@@ -44,8 +45,20 @@ export default function FeatureSelectionPage() {
     const kept = [...safeFeatures, ...keptOthers];
     const dropped = droppedOthers.map(c => c.name);
     
-    return { kept, dropped };
-  }, [filter2Results, initialColumns, safeList]);
+    // Calculate MI for UI display
+    let avgMIKept = 0;
+    let avgMIDropped = 0;
+    if (dataset && dataset.headers.includes("hired") || (dataset && dataset.headers[dataset.headers.length-1])) {
+      const target = dataset.headers.includes("hired") ? "hired" : dataset.headers[dataset.headers.length-1];
+      const keptMI = kept.map(c => calculateMutualInfo(dataset.data, c.name, target));
+      const droppedMI = droppedOthers.map(c => calculateMutualInfo(dataset.data, c.name, target));
+      
+      avgMIKept = keptMI.length ? keptMI.reduce((a, b) => a + b) / keptMI.length : 0;
+      avgMIDropped = droppedMI.length ? droppedMI.reduce((a, b) => a + b) / droppedMI.length : 0;
+    }
+
+    return { kept, dropped, avgMIKept, avgMIDropped };
+  }, [filter2Results, initialColumns, safeList, dataset]);
 
   const filter1Drops = filter1Results.dropped.length;
   const filter2Drops = filter2Results.dropped.length;
@@ -251,8 +264,8 @@ export default function FeatureSelectionPage() {
                     </div>
                   )}
                   <div className="flex justify-between text-xs px-4 py-2 bg-muted/20">
-                    <span className="text-muted-foreground">Excluded features avg MI Score: <span className="font-mono text-foreground ml-1">0.01569</span></span>
-                    <span className="text-muted-foreground">Retained features avg MI Score: <span className="font-mono text-primary font-bold ml-1">0.02435 (1.6x signal)</span></span>
+                    <span className="text-muted-foreground">Excluded features avg MI Score: <span className="font-mono text-foreground ml-1">{filter3Results.avgMIDropped.toFixed(5)}</span></span>
+                    <span className="text-muted-foreground">Retained features avg MI Score: <span className="font-mono text-primary font-bold ml-1">{filter3Results.avgMIKept.toFixed(5)} ({((filter3Results.avgMIKept / (filter3Results.avgMIDropped || 0.0001)) || 1).toFixed(1)}x signal)</span></span>
                   </div>
                 </motion.div>
               )}
