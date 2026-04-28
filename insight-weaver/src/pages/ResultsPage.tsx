@@ -109,6 +109,24 @@ export default function ResultsPage() {
     return points;
   }, [debiasedDataset]);
 
+  const handleDownloadUnbiasedDataset = () => {
+    if (!debiasedDataset) {
+      toast.error("No debiased dataset available. Please run the Fairness Lab detox first.");
+      return;
+    }
+    const csv = Papa.unparse(debiasedDataset.data);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Unbiased_${dataset.fileName.split('.')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success("Unbiased dataset downloaded!", {
+      description: `${debiasedDataset.data.length} rows exported with bias removed.`
+    });
+  };
+
   const handleDownloadAudit = () => {
     const auditText = `
 ETHICAL AI COMPLIANCE AUDIT
@@ -325,12 +343,19 @@ Alignment Standards: International Ethical Frameworks
             </div>
          </div>
 
-         <div className="mt-12 flex gap-4">
+         <div className="mt-12 flex flex-wrap gap-4">
             <button 
               onClick={handleDownloadAudit}
               className="px-8 py-4 rounded-full bg-primary text-white text-[10px] font-black uppercase tracking-widest shadow-glow hover:scale-105 transition-all flex items-center gap-2"
             >
                <Download className="h-4 w-4" /> Download Scientific Audit
+            </button>
+            <button 
+              onClick={handleDownloadUnbiasedDataset}
+              disabled={!debiasedDataset}
+              className="px-8 py-4 rounded-full bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest shadow-[0_0_20px_rgba(16,185,129,0.4)] hover:scale-105 transition-all flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
+            >
+               <Download className="h-4 w-4" /> Download Unbiased Dataset
             </button>
             <button 
               onClick={handleViewLogs}
