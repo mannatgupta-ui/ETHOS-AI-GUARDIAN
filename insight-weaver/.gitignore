@@ -25,3 +25,10 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+
+# Bun (project uses Node/npm only)
+bun.lock
+bun.lockb
+
+# Large data files
+els_02_12_byf3pststu_v1_0.csv
