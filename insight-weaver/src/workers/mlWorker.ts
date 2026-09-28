@@ -3,6 +3,8 @@ import KNN from 'ml-knn';
 import { ConfusionMatrix } from 'ml-confusion-matrix';
 import LogisticRegression from 'ml-logistic-regression';
 import { Matrix } from 'ml-matrix';
+import * as brain from 'brain.js';
+import SVM from 'libsvm-js/asm';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -129,7 +131,7 @@ function runModel(
   let predictions: number[] = [];
 
   try {
-    if (selectedModel === 'rf' || selectedModel === 'xgb' || selectedModel === 'lgbm') {
+    if (selectedModel === 'rf') {
       const nEst = Math.min(hyperParams.n_estimators || 50, 60);
       const maxD = hyperParams.max_depth === -1 ? 10 : Math.min(hyperParams.max_depth || 10, 15);
       const rf = new RandomForestClassifier({ nEstimators: nEst, maxDepth: maxD });
@@ -139,36 +141,30 @@ function runModel(
       const k = Math.min(hyperParams.n_neighbors || 5, X_train.length - 1, 15);
       const knn = new KNN(X_train, y_train, { k });
       predictions = knn.predict(X_test);
-    } else if (selectedModel === 'svm' || selectedModel === 'logistic' || selectedModel === 'linear') {
+    } else if (selectedModel === 'svm') {
+      const svm = new SVM({
+        kernel: hyperParams.kernel === 'linear' ? SVM.KERNEL_TYPES.LINEAR : hyperParams.kernel === 'poly' ? SVM.KERNEL_TYPES.POLY : SVM.KERNEL_TYPES.RBF,
+        type: SVM.SVM_TYPES.C_SVC,
+        cost: hyperParams.C || 1
+      });
+      svm.train(X_train, y_train);
+      predictions = svm.predict(X_test);
+    } else if (selectedModel === 'logistic' || selectedModel === 'linear') {
       const lr = hyperParams.C ? 1 / (hyperParams.C * 100) : 0.01;
       const logreg = new LogisticRegression({ numSteps: 500, learningRate: Math.max(0.0001, lr) });
       logreg.train(new Matrix(X_train), Matrix.columnVector(y_train));
       predictions = logreg.predict(new Matrix(X_test)).to1DArray();
     } else if (selectedModel === 'nn') {
-      const hiddenNodes = Math.min((hyperParams.hidden_layers || 2) * 8, 32);
-      const inputSize = X_train[0]?.length || 1;
-      const w1 = Array.from({ length: inputSize }, () =>
-        Array.from({ length: hiddenNodes }, () => (Math.random() - 0.5) * 0.1)
-      );
-      const w2 = Array.from({ length: hiddenNodes }, () => (Math.random() - 0.5) * 0.1);
-      const sig = (x: number) => 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
+      const net = new brain.NeuralNetwork({
+        hiddenLayers: [Math.min((hyperParams.hidden_layers || 2) * 8, 32)],
+        activation: hyperParams.activation || 'sigmoid'
+      });
+      const trainingData = X_train.map((x, i) => ({ input: x, output: [y_train[i]] }));
       const epochs = Math.min(hyperParams.epochs || 50, 80);
-      for (let e = 0; e < epochs; e++) {
-        for (let i = 0; i < X_train.length; i++) {
-          const h = w2.map((_, j) => sig(X_train[i].reduce((s, v, k) => s + v * w1[k][j], 0)));
-          const out = sig(h.reduce((s, v, k) => s + v * w2[k], 0));
-          const err = y_train[i] - out;
-          const dOut = out * (1 - out) * err;
-          for (let j = 0; j < hiddenNodes; j++) {
-            const dH = h[j] * (1 - h[j]) * w2[j] * dOut;
-            w2[j] += 0.01 * h[j] * dOut;
-            for (let k = 0; k < inputSize; k++) w1[k][j] += 0.01 * X_train[i][k] * dH;
-          }
-        }
-      }
+      net.train(trainingData, { iterations: epochs, log: false });
       predictions = X_test.map(x => {
-        const h = w2.map((_, j) => sig(x.reduce((s, v, k) => s + v * w1[k][j], 0)));
-        return sig(h.reduce((s, v, k) => s + v * w2[k], 0)) > 0.5 ? 1 : 0;
+        const res = net.run(x) as any;
+        return (res[0] || res) > 0.5 ? 1 : 0;
       });
     } else {
       const mc = y_train.filter(v => v === 1).length > y_train.length / 2 ? 1 : 0;
@@ -329,7 +325,7 @@ self.onmessage = (event: MessageEvent) => {
         } catch { /* skip */ }
       };
 
-      if (selectedModel === 'rf' || selectedModel === 'xgb' || selectedModel === 'lgbm') {
+      if (selectedModel === 'rf') {
         for (const n of [20, 40]) {
           for (const d of [5, 10]) {
             const rf = new RandomForestClassifier({ nEstimators: n, maxDepth: d });
@@ -518,7 +514,7 @@ function trainModelForStress(
   X_train: number[][], y_train: number[],
   selectedModel: string, hyperParams: any
 ): any {
-  if (selectedModel === 'rf' || selectedModel === 'xgb' || selectedModel === 'lgbm') {
+  if (selectedModel === 'rf') {
     const nEst = Math.min(hyperParams.n_estimators || 50, 60);
     const maxD = hyperParams.max_depth === -1 ? 10 : Math.min(hyperParams.max_depth || 10, 15);
     const rf = new RandomForestClassifier({ nEstimators: nEst, maxDepth: maxD });
@@ -528,6 +524,23 @@ function trainModelForStress(
     const k = Math.min(hyperParams.n_neighbors || 5, X_train.length - 1, 15);
     const knn = new KNN(X_train, y_train, { k });
     return knn;
+  } else if (selectedModel === 'svm') {
+    const svm = new SVM({
+      kernel: hyperParams.kernel === 'linear' ? SVM.KERNEL_TYPES.LINEAR : hyperParams.kernel === 'poly' ? SVM.KERNEL_TYPES.POLY : SVM.KERNEL_TYPES.RBF,
+      type: SVM.SVM_TYPES.C_SVC,
+      cost: hyperParams.C || 1
+    });
+    svm.train(X_train, y_train);
+    return svm;
+  } else if (selectedModel === 'nn') {
+    const net = new brain.NeuralNetwork({
+      hiddenLayers: [Math.min((hyperParams.hidden_layers || 2) * 8, 32)],
+      activation: hyperParams.activation || 'sigmoid'
+    });
+    const trainingData = X_train.map((x, i) => ({ input: x, output: [y_train[i]] }));
+    const epochs = Math.min(hyperParams.epochs || 50, 80);
+    net.train(trainingData, { iterations: epochs, log: false });
+    return net;
   } else {
     const lr = hyperParams.C ? 1 / (hyperParams.C * 100) : 0.01;
     const logreg = new LogisticRegression({ numSteps: 500, learningRate: Math.max(0.0001, lr) });
@@ -539,8 +552,13 @@ function trainModelForStress(
 function predictModelForStress(
   model: any, X_test: number[][], selectedModel: string
 ): number[] {
-  if (selectedModel === 'rf' || selectedModel === 'xgb' || selectedModel === 'lgbm' || selectedModel === 'knn') {
+  if (selectedModel === 'rf' || selectedModel === 'knn' || selectedModel === 'svm') {
     return model.predict(X_test);
+  } else if (selectedModel === 'nn') {
+    return X_test.map(x => {
+      const res = model.run(x) as any;
+      return (res[0] || res) > 0.5 ? 1 : 0;
+    });
   } else {
     return model.predict(new Matrix(X_test)).to1DArray();
   }
