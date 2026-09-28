@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { calculateFairnessMetrics } from "@/lib/metrics";
 import { getPipelineInsights } from "@/lib/gemini";
 
-type ModelId = "rf" | "linear" | "logistic" | "svm" | "knn" | "nn";
+type ModelId = "rf" | "xgb" | "linear" | "logistic" | "svm" | "knn" | "nn";
 type DataSource = "raw" | "debiased";
 
 interface ModelConfig {
@@ -35,6 +35,15 @@ const MODEL_DEFINITIONS: ModelConfig[] = [
       n_estimators: { label: "Estimators", type: "number", min: 10, max: 200, step: 10, default: 50 },
       max_depth: { label: "Max Depth", type: "number", min: 1, max: 20, step: 1, default: 10 },
       min_samples_split: { label: "Min Split", type: "number", min: 2, max: 20, step: 1, default: 2 }
+    }
+  },
+  {
+    id: "xgb", name: "XGBoost", type: "both", color: "hsl(45,90%,55%)", gradient: "from-amber-500 to-orange-600",
+    description: "Extreme gradient boosting, high-performance ensemble",
+    params: {
+      n_estimators: { label: "Estimators", type: "number", min: 10, max: 200, step: 10, default: 50 },
+      eta: { label: "ETA (LR)", type: "number", min: 0.01, max: 0.5, step: 0.01, default: 0.3 },
+      max_depth: { label: "Max Depth", type: "number", min: 1, max: 20, step: 1, default: 6 }
     }
   },
   {

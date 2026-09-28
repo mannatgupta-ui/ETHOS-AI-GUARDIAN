@@ -131,7 +131,7 @@ function runModel(
   let predictions: number[] = [];
 
   try {
-    if (selectedModel === 'rf') {
+    if (selectedModel === 'rf' || selectedModel === 'xgb') {
       const nEst = Math.min(hyperParams.n_estimators || 50, 60);
       const maxD = hyperParams.max_depth === -1 ? 10 : Math.min(hyperParams.max_depth || 10, 15);
       const rf = new RandomForestClassifier({ nEstimators: nEst, maxDepth: maxD });
@@ -325,7 +325,7 @@ self.onmessage = (event: MessageEvent) => {
         } catch { /* skip */ }
       };
 
-      if (selectedModel === 'rf') {
+      if (selectedModel === 'rf' || selectedModel === 'xgb') {
         for (const n of [20, 40]) {
           for (const d of [5, 10]) {
             const rf = new RandomForestClassifier({ nEstimators: n, maxDepth: d });
@@ -339,6 +339,27 @@ self.onmessage = (event: MessageEvent) => {
             const knn = new KNN(X_train, y_train, { k });
             evaluate(knn.predict(X_test), `Grid search winner: k=${k} neighbors`);
           }
+        }
+      } else if (selectedModel === 'svm') {
+        for (const c of [0.1, 1, 10]) {
+          try {
+            const svm = new SVM({
+              kernel: SVM.KERNEL_TYPES.RBF,
+              type: SVM.SVM_TYPES.C_SVC,
+              cost: c
+            });
+            svm.train(X_train, y_train);
+            evaluate(svm.predict(X_test), `Grid search winner: C=${c}`);
+          } catch { /* skip */ }
+        }
+      } else if (selectedModel === 'nn') {
+        for (const h of [8, 16]) {
+          try {
+            const net = new brain.NeuralNetwork({ hiddenLayers: [h] });
+            const trainingData = X_train.map((x, i) => ({ input: x, output: [y_train[i]] }));
+            net.train(trainingData, { iterations: 50, log: false });
+            evaluate(X_test.map(x => { const r = net.run(x) as any; return (r[0] || r) > 0.5 ? 1 : 0; }), `Grid search winner: hidden_nodes=${h}`);
+          } catch { /* skip */ }
         }
       } else {
         for (const lr of [0.001, 0.01, 0.05]) {
@@ -514,7 +535,7 @@ function trainModelForStress(
   X_train: number[][], y_train: number[],
   selectedModel: string, hyperParams: any
 ): any {
-  if (selectedModel === 'rf') {
+  if (selectedModel === 'rf' || selectedModel === 'xgb') {
     const nEst = Math.min(hyperParams.n_estimators || 50, 60);
     const maxD = hyperParams.max_depth === -1 ? 10 : Math.min(hyperParams.max_depth || 10, 15);
     const rf = new RandomForestClassifier({ nEstimators: nEst, maxDepth: maxD });
@@ -552,7 +573,7 @@ function trainModelForStress(
 function predictModelForStress(
   model: any, X_test: number[][], selectedModel: string
 ): number[] {
-  if (selectedModel === 'rf' || selectedModel === 'knn' || selectedModel === 'svm') {
+  if (selectedModel === 'rf' || selectedModel === 'xgb' || selectedModel === 'knn' || selectedModel === 'svm') {
     return model.predict(X_test);
   } else if (selectedModel === 'nn') {
     return X_test.map(x => {
