@@ -15,6 +15,7 @@ import ModelPage from "./pages/ModelPage";
 import FairnessPage from "./pages/FairnessPage";
 import ResultsPage from "./pages/ResultsPage";
 import NotFound from "./pages/NotFound";
+import PPIDebiasPage from "./pages/PPIDebiasPage";
 import { useEffect } from "react";
 
 const queryClient = new QueryClient();
@@ -45,6 +46,7 @@ const App = () => (
                 <Route path="/features" element={<FeaturePage />} />
                 <Route path="/model" element={<ModelPage />} />
                 <Route path="/fairness" element={<FairnessPage />} />
+                <Route path="/ppi" element={<PPIDebiasPage />} />
                 <Route path="/results" element={<ResultsPage />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>

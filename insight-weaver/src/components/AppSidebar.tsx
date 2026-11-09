@@ -1,4 +1,4 @@
-import { Upload, LayoutDashboard, BarChart3, Beaker, Wrench, Brain, Trophy, Sun, Moon, Filter, Scale } from "lucide-react";
+import { Upload, LayoutDashboard, BarChart3, Beaker, Wrench, Brain, Trophy, Sun, Moon, Filter, Scale, FlaskConical } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { useData } from "@/context/DataContext";
@@ -28,6 +28,7 @@ const workflow = [
     items: [
       { title: "Modeling Prep", url: "/features", icon: Wrench },
       { title: "Fairness Lab", url: "/fairness", icon: Scale },
+      { title: "PPI Debiasing", url: "/ppi", icon: FlaskConical },
       { title: "Model Lab", url: "/model", icon: Brain },
     ]
   },
