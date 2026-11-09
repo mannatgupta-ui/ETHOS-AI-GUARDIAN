@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode } from "react";
+import type { PPIResult } from "@/lib/ppiDebias";
 
 export interface ColumnStats {
   name: string;
@@ -58,6 +59,10 @@ interface DataContextType {
   setModelResults: (r: any | null) => void;
   boostedMetrics: BoostedMetrics | null;
   setBoostedMetrics: (m: BoostedMetrics | null) => void;
+  ppiResult: PPIResult | null;
+  setPPIResult: (r: PPIResult | null) => void;
+  ppiDebiasedDataset: DatasetInfo | null;
+  setPPIDebiasedDataset: (d: DatasetInfo | null) => void;
 
   // PERSISTED ANALYSIS HISTORY
   fairnessLogs: string[];
@@ -105,6 +110,8 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const [darkMode, setDarkMode] = useState(true);
   const [modelResults, setModelResults] = useState<any | null>(null);
   const [boostedMetrics, setBoostedMetrics] = useState<BoostedMetrics | null>(null);
+  const [ppiResult, setPPIResult] = useState<PPIResult | null>(null);
+  const [ppiDebiasedDataset, setPPIDebiasedDataset] = useState<DatasetInfo | null>(null);
 
   // HISTORY STATE
   const [fairnessLogs, setFairnessLogs] = useState<string[]>([]);
@@ -131,6 +138,8 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       setDebiasedDataset(null);
       setModelResults(null);
       setBoostedMetrics(null);
+      setPPIResult(null);
+      setPPIDebiasedDataset(null);
       setSensitiveColumnsState([]);
       setSensitiveColumnState(null);
       setDatasetDescription(null);
@@ -149,6 +158,8 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       darkMode, setDarkMode,
       modelResults, setModelResults,
       boostedMetrics, setBoostedMetrics,
+      ppiResult, setPPIResult,
+      ppiDebiasedDataset, setPPIDebiasedDataset,
       fairnessLogs, setFairnessLogs,
       scanComplete, setScanComplete,
       modelLogs, setModelLogs,

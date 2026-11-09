@@ -529,6 +529,237 @@ self.onmessage = (event: MessageEvent) => {
       self.postMessage({ type: 'STRESS_TEST_ERROR', message: err.message || 'Unknown stress test error' });
     }
   }
+
+  // ── PPI_DEBIAS ────────────────────────────────────────────────────────────
+  if (type === 'PPI_DEBIAS') {
+    try {
+      const { rawData, targetColumn, sensitiveColumns, selectedModel, hyperParams, lambda, strength } = payload;
+
+      self.postMessage({ type: 'PPI_PROGRESS', value: 5, status: 'Preparing data for PPI analysis...' });
+
+      const positiveClass = getPositiveClass(rawData, targetColumn);
+      const negativeClass = (() => {
+        const unique = Array.from(new Set(rawData.map((r: any) => String(r[targetColumn])))).filter(
+          (v: any) => v !== 'null' && v !== 'undefined' && v !== '' && v !== positiveClass
+        );
+        return (unique as string[])[0] || '0';
+      })();
+
+      self.postMessage({ type: 'PPI_PROGRESS', value: 15, status: 'Encoding features and splitting data...' });
+
+      const { X, y, sensitives } = prepareData(rawData, targetColumn, sensitiveColumns, positiveClass);
+      if (X.length < 10) throw new Error('Dataset too small for PPI — need at least 10 valid rows.');
+
+      // 80/20 split: "labeled" = train, full data = unlabeled pool
+      const splitRatio = 0.8;
+      const { X_train, y_train } = splitData(X, y, sensitives, splitRatio);
+
+      const labeledIndices = X.map((_: any, i: number) => i).slice(0, X_train.length);
+
+      self.postMessage({ type: 'PPI_PROGRESS', value: 30, status: `Training ${selectedModel.toUpperCase()} for PPI predictions...` });
+
+      let predsOnAll: number[] = [];
+      let predsOnLabeled: number[] = [];
+
+      try {
+        if (selectedModel === 'rf' || selectedModel === 'xgb') {
+          const nEst = Math.min(hyperParams?.n_estimators || 50, 60);
+          const maxD = hyperParams?.max_depth === -1 ? 10 : Math.min(hyperParams?.max_depth || 10, 15);
+          const rf = new RandomForestClassifier({ nEstimators: nEst, maxDepth: maxD });
+          rf.train(X_train, y_train);
+          predsOnAll     = rf.predict(X);
+          predsOnLabeled = rf.predict(X_train);
+        } else if (selectedModel === 'knn') {
+          const k = Math.min(hyperParams?.n_neighbors || 5, X_train.length - 1, 15);
+          const knn = new KNN(X_train, y_train, { k });
+          predsOnAll     = knn.predict(X);
+          predsOnLabeled = knn.predict(X_train);
+        } else if (selectedModel === 'svm') {
+          const svm = new SVM({
+            kernel: hyperParams?.kernel === 'linear' ? SVM.KERNEL_TYPES.LINEAR : hyperParams?.kernel === 'poly' ? SVM.KERNEL_TYPES.POLY : SVM.KERNEL_TYPES.RBF,
+            type: SVM.SVM_TYPES.C_SVC,
+            cost: hyperParams?.C || 1
+          });
+          svm.train(X_train, y_train);
+          predsOnAll     = svm.predict(X);
+          predsOnLabeled = svm.predict(X_train);
+        } else if (selectedModel === 'nn') {
+          const net = new brain.NeuralNetwork({
+            hiddenLayers: [Math.min((hyperParams?.hidden_layers || 2) * 8, 32)],
+            activation: hyperParams?.activation || 'sigmoid'
+          });
+          const trainingData = X_train.map((x: number[], i: number) => ({ input: x, output: [y_train[i]] }));
+          net.train(trainingData, { iterations: Math.min(hyperParams?.epochs || 50, 80), log: false });
+          predsOnAll     = X.map((x: number[]) => { const r = net.run(x) as any; return (r[0] || r) > 0.5 ? 1 : 0; });
+          predsOnLabeled = X_train.map((x: number[]) => { const r = net.run(x) as any; return (r[0] || r) > 0.5 ? 1 : 0; });
+        } else {
+          const lr = hyperParams?.C ? 1 / (hyperParams.C * 100) : 0.01;
+          const logreg = new LogisticRegression({ numSteps: 500, learningRate: Math.max(0.0001, lr) });
+          logreg.train(new Matrix(X_train), Matrix.columnVector(y_train));
+          predsOnAll     = logreg.predict(new Matrix(X)).to1DArray();
+          predsOnLabeled = logreg.predict(new Matrix(X_train)).to1DArray();
+        }
+      } catch {
+        // fallback to majority class
+        const mc = y_train.filter((v: number) => v === 1).length > y_train.length / 2 ? 1 : 0;
+        predsOnAll     = X.map(() => mc);
+        predsOnLabeled = X_train.map(() => mc);
+      }
+
+      self.postMessage({ type: 'PPI_PROGRESS', value: 55, status: 'Computing PPI-corrected group statistics...' });
+
+      // --- PPI Computation (inline, mirrors ppiDebias.ts) ---
+      const getGroup = (row: any) => sensitiveColumns.map((col: string) => `${col}: ${row[col]}`).join(' | ');
+      const groupSet = new Set(rawData.map((r: any) => getGroup(r)));
+      const groups = Array.from(groupSet).filter(
+        (g: any) => !g.includes('null') && !g.includes('undefined') && g !== ''
+      );
+
+      const zAlpha2 = 1.96; // 95% CI
+      const effectiveLambda = typeof lambda === 'number' ? lambda : 1.0;
+
+      const groupStats = (groups as string[]).map((group: string) => {
+        const allGroupIdx = rawData
+          .map((r: any, i: number) => ({ r, i }))
+          .filter(({ r }: any) => getGroup(r) === group)
+          .map(({ i }: any) => i);
+
+        const labeledGroupIdx = labeledIndices.filter((i: number) => getGroup(rawData[i]) === group);
+        const n_total = allGroupIdx.length;
+        const n_labeled = labeledGroupIdx.length;
+
+        let classicalPos = 0;
+        labeledGroupIdx.forEach((i: number) => {
+          if (String(rawData[i][targetColumn]) === positiveClass) classicalPos++;
+        });
+        const classicalRate = n_labeled > 0 ? classicalPos / n_labeled : 0;
+
+        if (n_labeled < 5 || n_total < 2) {
+          return { group, n_labeled, n_total, classicalRate, ppiRate: classicalRate, ppiCILow: 0, ppiCIHigh: 1, rectifier: 0, valid: false };
+        }
+
+        const predsGroup = allGroupIdx.map((i: number) => predsOnAll[i]);
+        const meanPredAll = predsGroup.reduce((a: number, b: number) => a + b, 0) / predsGroup.length;
+        const varPredAll = predsGroup.reduce((acc: number, p: number) => acc + (p - meanPredAll) ** 2, 0) / predsGroup.length;
+
+        const predLabeledGroup: number[] = [];
+        const labelsGroup: number[] = [];
+        labeledGroupIdx.forEach((globalIdx: number) => {
+          const pos = labeledIndices.indexOf(globalIdx);
+          if (pos >= 0 && pos < predsOnLabeled.length) {
+            predLabeledGroup.push(predsOnLabeled[pos]);
+            labelsGroup.push(String(rawData[globalIdx][targetColumn]) === positiveClass ? 1 : 0);
+          }
+        });
+
+        const rectifierVals = labelsGroup.map((y: number, i: number) => y - predLabeledGroup[i]);
+        const rectifier = rectifierVals.length > 0 ? rectifierVals.reduce((a: number, b: number) => a + b, 0) / rectifierVals.length : 0;
+        const ppiRate = Math.max(0, Math.min(1, effectiveLambda * meanPredAll + rectifier));
+        const varRectifier = rectifierVals.reduce((acc: number, r: number) => acc + (r - rectifier) ** 2, 0) / Math.max(1, rectifierVals.length);
+        const ciHalfWidth = zAlpha2 * Math.sqrt((effectiveLambda ** 2 * varPredAll) / n_total + varRectifier / n_labeled);
+        const ppiCILow  = Math.max(0, ppiRate - ciHalfWidth);
+        const ppiCIHigh = Math.min(1, ppiRate + ciHalfWidth);
+
+        return { group, n_labeled, n_total, classicalRate, ppiRate, ppiCILow, ppiCIHigh, rectifier, valid: true };
+      });
+
+      const validGroups = (groupStats as any[]).filter((g: any) => g.valid && g.n_total >= 5);
+      let ppiSPD = 0, classicalSPD = 0, ppiDI = 1, privilegedGroup = 'N/A', unprivilegedGroup = 'N/A';
+      if (validGroups.length >= 2) {
+        validGroups.sort((a: any, b: any) => b.ppiRate - a.ppiRate);
+        const privileged   = validGroups[0];
+        const unprivileged = validGroups[validGroups.length - 1];
+        ppiSPD       = unprivileged.ppiRate - privileged.ppiRate;
+        classicalSPD = unprivileged.classicalRate - privileged.classicalRate;
+        ppiDI        = privileged.ppiRate > 0 ? unprivileged.ppiRate / privileged.ppiRate : 1;
+        privilegedGroup   = privileged.group;
+        unprivilegedGroup = unprivileged.group;
+      } else {
+        const all = [...groupStats].sort((a: any, b: any) => b.ppiRate - a.ppiRate) as any[];
+        privilegedGroup   = all[0]?.group || 'N/A';
+        unprivilegedGroup = all[all.length - 1]?.group || 'N/A';
+      }
+
+      self.postMessage({ type: 'PPI_PROGRESS', value: 72, status: 'Generating PPI-debiased dataset...' });
+
+      // --- PPI Dataset Generation ---
+      const effectiveStrength = typeof strength === 'number' ? strength : 1.0;
+      const groupTargetMap = new Map<string, number>();
+      (groupStats as any[]).forEach((g: any) => {
+        const target = g.classicalRate + (g.ppiRate - g.classicalRate) * effectiveStrength;
+        groupTargetMap.set(g.group, Math.max(0, Math.min(1, target)));
+      });
+
+      const debiasedData = rawData.map((r: any) => ({ ...r }));
+      const correctionLog: string[] = [];
+      let totalFlips = 0;
+
+      for (const [group, targetRate] of groupTargetMap.entries()) {
+        const groupRows = debiasedData
+          .map((r: any, i: number) => ({ r, i }))
+          .filter(({ r }: any) => getGroup(r) === group);
+
+        if (groupRows.length === 0) continue;
+
+        const currentPosCount = groupRows.filter(({ r }: any) => String(r[targetColumn]) === positiveClass).length;
+        const targetPosCount  = Math.round(targetRate * groupRows.length);
+        const flipDelta       = targetPosCount - currentPosCount;
+
+        if (flipDelta === 0) {
+          correctionLog.push(`Group "${group}": already at PPI target (${(targetRate * 100).toFixed(1)}%)`);
+          continue;
+        }
+
+        if (flipDelta > 0) {
+          const candidates = groupRows
+            .filter(({ r }: any) => String(r[targetColumn]) !== positiveClass)
+            .sort((a: any, b: any) => predsOnAll[b.i] - predsOnAll[a.i]);
+          let flipped = 0;
+          for (const { i } of candidates) {
+            if (flipped >= flipDelta) break;
+            debiasedData[i][targetColumn] = positiveClass;
+            flipped++;
+            totalFlips++;
+          }
+          correctionLog.push(`Group "${group}": +${flipped} corrections (neg→pos) | PPI target: ${(targetRate * 100).toFixed(1)}%`);
+        } else {
+          const candidates = groupRows
+            .filter(({ r }: any) => String(r[targetColumn]) === positiveClass)
+            .sort((a: any, b: any) => predsOnAll[a.i] - predsOnAll[b.i]);
+          let flipped = 0;
+          for (const { i } of candidates) {
+            if (flipped >= -flipDelta) break;
+            debiasedData[i][targetColumn] = negativeClass;
+            flipped++;
+            totalFlips++;
+          }
+          correctionLog.push(`Group "${group}": −${flipped} corrections (pos→neg) | PPI target: ${(targetRate * 100).toFixed(1)}%`);
+        }
+      }
+
+      self.postMessage({ type: 'PPI_PROGRESS', value: 92, status: 'Finalizing PPI report...' });
+
+      self.postMessage({
+        type: 'PPI_DEBIAS_DONE',
+        payload: {
+          groupStats,
+          ppiSPD,
+          classicalSPD,
+          ppiDI,
+          privilegedGroup,
+          unprivilegedGroup,
+          lambda: effectiveLambda,
+          debiasedData,
+          correctionLog,
+          totalFlips,
+          positiveClass,
+          negativeClass,
+        }
+      });
+    } catch (err: any) {
+      self.postMessage({ type: 'PPI_ERROR', message: err.message || 'Unknown PPI error' });
+    }
+  }
 };
 
 function trainModelForStress(
